@@ -1,0 +1,260 @@
+const int RunningAverageCount1 = 64;
+float RunningAverageBuffer1[RunningAverageCount1], RunningAverageVolt1;
+int NextRunningAverage1;
+int i1;
+
+const int RunningAverageCount2 = 64;
+float RunningAverageBuffer2[RunningAverageCount2], RunningAverageVolt2;
+int NextRunningAverage2;
+int i2;
+
+int mv, x_axis, y_axis;
+
+//////////////
+
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+SoftwareSerial mySerial(10, 9); // RX = pin 10, TX = pin 9
+TinyGPSPlus gps;
+double latitude, longitude;
+
+/////////////
+
+char mob_no[] = "9487384543", q;
+
+char at_flag, echo_flag, net_flag;
+
+void gsm_init(void);
+void gsm_msg(char mode2);
+
+//////////////
+
+int ms0p125 = 0;
+
+char update_flag = 0;
+
+char flag2 = 0;
+
+char accident_flag;
+
+String link;
+ 
+void setup()
+{
+ Serial.begin(9600);
+
+ mySerial.begin(9600);
+
+ cli();//stop interrupts
+
+ //set timer2 interrupt at 8kHz
+ TCCR2A = 0;// set entire TCCR2A register to 0
+ TCCR2B = 0;// same for TCCR2B
+ TCNT2  = 0;//initialize counter value to 0
+ // set compare match register for 8khz increments
+ OCR2A = 249;// = (16*10^6) / (8000*8) - 1 (must be <256)
+ // turn on CTC mode
+ TCCR2A |= (1 << WGM21);
+ // Set CS21 bit for 8 prescaler
+ TCCR2B |= (1 << CS21);   
+ // enable timer compare interrupt
+ TIMSK2 |= (1 << OCIE2A);
+
+ sei();//allow interrupts
+
+ gsm_init();
+   
+ gsm_msg(99);  
+}
+
+ISR(TIMER2_COMPA_vect)
+{
+ ++ms0p125;
+
+ if(ms0p125 > 8000) //1sec
+ {
+  update_flag = 1;
+  
+  ms0p125 = 0;
+ }
+}
+ 
+void loop()
+{
+  //Read GPS data
+  mySerial.listen();
+  
+  while(mySerial.available()) 
+  {
+   gps.encode(mySerial.read());
+  }
+  
+  if(gps.location.isUpdated()) 
+  {
+   latitude = gps.location.lat();
+   longitude = gps.location.lng();
+   link = "http://www.google.com/maps/place/" + String(latitude) + "," + String(longitude) ;
+   //Serial.print("Link Google Maps : ");
+   //Serial.println(link);
+   //Serial.print("Satellite Count : ");
+   //Serial.println(gps.satellites.value());
+   //Serial.print("Latitude : ");
+   //Serial.println(latitude, 6);
+   //Serial.print("Longitude : ");
+   //Serial.println(longitude, 6);
+   //Serial.print("Speed MPH : ");
+   //Serial.println(gps.speed.mph());
+   //Serial.print("Altitude Feet : ");
+   //Serial.println(gps.altitude.feet());
+   //Serial.println("");
+  }
+
+ //Read accelerometer value
+ RunningAverageBuffer1[NextRunningAverage1++] = analogRead(A0);
+ if(NextRunningAverage1 >= RunningAverageCount1)NextRunningAverage1 = 0;
+ RunningAverageVolt1 = 0;
+ for(i1=0; i1< RunningAverageCount1; ++i1)RunningAverageVolt1 += RunningAverageBuffer1[i1];
+ RunningAverageVolt1 /= RunningAverageCount1;
+
+ RunningAverageBuffer2[NextRunningAverage2++] = analogRead(A1);
+ if(NextRunningAverage2 >= RunningAverageCount2)NextRunningAverage2 = 0;
+ RunningAverageVolt2 = 0;
+ for(i2=0; i2< RunningAverageCount2; ++i2)RunningAverageVolt2 += RunningAverageBuffer2[i2];
+ RunningAverageVolt2 /= RunningAverageCount2;
+
+ if(update_flag == 1)
+ {
+  x_axis = map((int)RunningAverageVolt1, 260, 400, 0, 180);  //280, 420 
+  
+       if(x_axis <   0)x_axis =   0;
+  else if(x_axis > 180)x_axis = 180;
+  
+  y_axis = map((int)RunningAverageVolt2, 260, 400, 0, 180);
+
+       if(y_axis <   0)y_axis =   0;
+  else if(y_axis > 180)y_axis = 180;
+
+  ///////////////////
+ 
+  mySerial.print("%X-axis: ");
+  
+       if(x_axis < 10)mySerial.print("  ");
+  else if(x_axis < 100)mySerial.print(" ");
+  mySerial.print(x_axis); 
+  
+  mySerial.print(" deg,  Y-axis: ");
+  
+       if(y_axis < 10)mySerial.print("  ");
+  else if(y_axis < 100)mySerial.print(" ");
+  mySerial.print(y_axis); 
+
+  mySerial.print(" deg,  ");
+
+
+  mySerial.print("Location: ");
+
+  mySerial.print(link);
+   
+  mySerial.print(", Status: ");  
+
+  if( (x_axis <= 45) || (x_axis >= 135) || (y_axis <= 45) || (y_axis >= 135) )
+  {
+   mySerial.print("ACCIDENT OCCURRED");
+   mySerial.println("#");
+     
+   if(flag2 == 0)
+   {
+    gsm_msg(2);
+    
+    flag2 = 1;
+   }
+  }
+  else 
+  {
+   mySerial.print("SAFE");
+   mySerial.println("#");
+    
+   flag2 = 0; 
+  }
+   
+      
+  update_flag = 0;
+ }
+  
+ delay(10);   
+}
+
+void gsm_init(void)
+{
+  at_flag = 1; 
+  
+  while(at_flag)
+  {
+   Serial.println("AT");
+   while(Serial.available()>0)
+   {
+    if(Serial.find("OK"))at_flag=0;
+   }
+   delay(1000); 
+  }
+    
+  delay(500);
+
+  echo_flag = 1;  
+  
+  while(echo_flag)
+  {
+   Serial.println("ATE0");
+   while(Serial.available()>0)
+   {
+    if(Serial.find("OK"))echo_flag=0;
+   }
+   delay(1000);
+  }  
+  
+  delay(500);
+  
+  net_flag = 1; 
+  
+  while(net_flag)
+  {
+   Serial.println("AT+CPIN?");
+   while(Serial.available()>0)
+   {
+    if(Serial.find("+CPIN: READY"))net_flag = 0; 
+   }
+   delay(1000);
+  }
+
+  delay(500);
+}
+
+
+ void gsm_msg(char mode2)
+ {
+  Serial.print("AT+CMGF=1\r\n"); delay(500);
+  //Serial.print("AT+CNMI=2,2,0,0,0\r\n"); delay(500);
+
+  Serial.print("AT+CMGS="); Serial.write('"'); for(q = 0; q <= 9; q++)Serial.write(mob_no[q]); Serial.write('"'); Serial.print("\r\n"); delay(500);
+  
+       if(mode2 ==  2)Serial.println("Accident occured..");
+  else if(mode2 == 99)Serial.println("Welcome..");
+
+  Serial.println("Location:");
+
+  Serial.println(link);
+      
+  if(mode2 == 2)Serial.println("Please take some action soon..");
+        
+  delay(500); 
+  
+  Serial.write(26); 
+  
+  delay(5000);
+
+  //Serial.println("ATDxxxxxxxxxx;");
+
+  Serial.print("ATD"); for(q = 0; q <= 9; q++)Serial.write(mob_no[q]); Serial.println(";");
+  
+  delay(500);
+ }
